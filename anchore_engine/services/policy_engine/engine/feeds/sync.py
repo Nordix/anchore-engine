@@ -140,6 +140,7 @@ class DataFeeds(object):
         :param operation_id:
         :param catalog_client:
         :param fetched_repo:
+        :param full_flush:
         :return:
         """
         # Load the feed objects
@@ -229,8 +230,7 @@ class DataFeeds(object):
 
     @staticmethod
     def sync(
-        provider,
-        sync_configs,
+        sync_util_provider,
         full_flush=False,
         catalog_client=None,
         operation_id=None,
@@ -240,10 +240,10 @@ class DataFeeds(object):
         :return:
         """
         result = []
-        to_sync = provider.get_feeds_to_sync(sync_configs)
+        to_sync = sync_util_provider.get_feeds_to_sync()
         if not to_sync:
             return result
-        feed_client = provider.get_client(sync_configs)
+        feed_client = sync_util_provider.get_client()
 
         logger.info(
             "Performing sync of feeds: {} (operation_id={})".format(
@@ -251,7 +251,9 @@ class DataFeeds(object):
             )
         )
         source_feeds = DataFeeds.get_feed_group_information(feed_client, to_sync)
-        updated, failed = provider.sync_metadata(source_feeds, operation_id, to_sync)
+        updated, failed = sync_util_provider.sync_metadata(
+            source_feeds, operation_id, to_sync
+        )
         updated_names = set(updated.keys())
 
         # Feeds configured to sync but that were not on the upstream source at all
@@ -295,7 +297,7 @@ class DataFeeds(object):
         # Sort the feed instances for the syncing process to ensure highest priority feeds sync first (e.g. vulnerabilities before package metadatas)
         feeds_to_sync = _ordered_feeds(feeds_to_sync)
 
-        groups_to_download = provider.get_groups_to_download(
+        groups_to_download = sync_util_provider.get_groups_to_download(
             source_feeds, updated, operation_id
         )
 

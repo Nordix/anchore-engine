@@ -1,18 +1,20 @@
-from typing import Dict, List, Optional, Union
+from abc import ABC, abstractmethod
+from typing import Optional
 
-from anchore_engine.common.schemas import (
-    FeedAPIGroupRecord,
-    FeedAPIRecord,
-    GrypeDBListing,
-)
+from anchore_engine.common.schemas import GrypeDBListing
 from anchore_engine.db import FeedGroupMetadata, FeedMetadata
 from anchore_engine.db import get_thread_scoped_session as get_session
-from anchore_engine.services.policy_engine.engine.feeds import IFeedSource
+from anchore_engine.services.policy_engine.engine.feeds.client import (
+    get_feeds_client,
+    get_grype_db_client,
+)
 from anchore_engine.services.policy_engine.engine.feeds.db import get_all_feeds
 from anchore_engine.subsys import logger
 
+GRYPE_DB_FEED_NAME = "grypedb"
 
-class DataFeedsUtils:
+
+class MetadataSyncUtils:
     @staticmethod
     def get_grype_db_listing(
         feed_group_information, grypedb_feed_name
@@ -121,7 +123,6 @@ class DataFeedsUtils:
 
         If a record exists in db but was not found upstream, it is not returned
 
-        :param feed_client:
         :param to_sync: list of string feed names to sync metadata on
         :return: tuple, first element: dict of names mapped to db records post-sync only including records successfully updated by upstream, second element is a list of tuples where each tuple is (failed_feed_name, error_obj)
         """
@@ -137,7 +138,7 @@ class DataFeedsUtils:
                 )
             )
             failed = []
-            db_feeds = DataFeedsUtils._pivot_and_filter_feeds_by_config(
+            db_feeds = MetadataSyncUtils._pivot_and_filter_feeds_by_config(
                 to_sync, list(source_feeds.keys()), get_all_feeds(db)
             )
 
@@ -148,11 +149,11 @@ class DataFeedsUtils:
                             feed_name, operation_id
                         )
                     )
-                    DataFeedsUtils._sync_feed_metadata(
+                    MetadataSyncUtils._sync_feed_metadata(
                         db, feed_api_record, db_feeds, operation_id
                     )
                     if groups:
-                        DataFeedsUtils._sync_feed_group_metadata(
+                        MetadataSyncUtils._sync_feed_group_metadata(
                             db, feed_api_record, db_feeds, operation_id
                         )
                 except Exception as e:
@@ -167,7 +168,7 @@ class DataFeedsUtils:
                     db.flush()
 
             # Reload
-            db_feeds = DataFeedsUtils._pivot_and_filter_feeds_by_config(
+            db_feeds = MetadataSyncUtils._pivot_and_filter_feeds_by_config(
                 to_sync, list(source_feeds.keys()), get_all_feeds(db)
             )
 
@@ -187,7 +188,49 @@ class DataFeedsUtils:
             db.rollback()
             raise
 
-    def get_groups_to_download(self, feeds_to_sync, operation_id):
+
+class SyncUtilProvider(ABC):
+    def __init__(self, sync_configs):
+        self._sync_configs = self._get_filtered_sync_configs(sync_configs)
+
+    def get_feeds_to_sync(self):
+        return list(self._sync_configs.keys())
+
+    @staticmethod
+    @abstractmethod
+    def _get_filtered_sync_configs(sync_configs):
+        ...
+
+    @abstractmethod
+    def get_client(self):
+        ...
+
+    @abstractmethod
+    def sync_metadata(self, source_feeds, operation_id, to_sync):
+        ...
+
+    @staticmethod
+    def get_groups_to_download(source_feeds, updated, operation_id):
+        ...
+
+
+class LegacySyncUtilProvider(SyncUtilProvider):
+    @staticmethod
+    def _get_filtered_sync_configs(sync_configs):
+        return {
+            feed_name: sync_config
+            for feed_name, sync_config in sync_configs.items()
+            if feed_name != GRYPE_DB_FEED_NAME
+        }
+
+    def get_client(self):
+        sync_config = list(self._sync_configs.values())[0]
+        return get_feeds_client(sync_config)
+
+    def sync_metadata(self, source_feeds, operation_id, to_sync):
+        return MetadataSyncUtils.sync_metadata(source_feeds, to_sync, operation_id)
+
+    def get_groups_to_download(self, source_feeds, feeds_to_sync, operation_id):
         # Do the fetches
         groups_to_download = []
         for f in feeds_to_sync:
@@ -220,3 +263,30 @@ class DataFeedsUtils:
                     )
                 )
             return groups_to_download
+
+
+class GrypeDBSyncUtilProvider(SyncUtilProvider):
+    @staticmethod
+    def _get_filtered_sync_configs(sync_configs):
+        return {GRYPE_DB_FEED_NAME: sync_configs.get(GRYPE_DB_FEED_NAME)}
+
+    def get_client(self):
+        grype_db_sync_config = self._sync_configs.get(GRYPE_DB_FEED_NAME)
+        return get_grype_db_client(grype_db_sync_config)
+
+    def sync_metadata(self, source_feeds, operation_id, to_sync):
+        return MetadataSyncUtils.sync_metadata(
+            source_feeds, to_sync, operation_id, groups=False
+        )
+
+    def get_groups_to_download(self, source_feeds, updated, operation_id):
+        api_feed_group = source_feeds[GRYPE_DB_FEED_NAME]["groups"][0]
+        feed_metadata = updated[GRYPE_DB_FEED_NAME]
+        group_to_download = FeedGroupMetadata(
+            name=api_feed_group.name,
+            feed_name=feed_metadata.name,
+            description=api_feed_group.description,
+            access_tier=api_feed_group.access_tier,
+            enabled=True,
+        )
+        return [group_to_download]
