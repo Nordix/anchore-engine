@@ -11,45 +11,61 @@ from sqlalchemy import asc, func, orm
 from anchore_engine import version
 from anchore_engine.clients.services.common import get_service_endpoint
 from anchore_engine.common.helpers import make_response_error
-from anchore_engine.db import DistroNamespace
 from anchore_engine.db import (
+    DistroNamespace,
+    FeedGroupMetadata,
+    FeedMetadata,
     Image,
     ImageCpe,
-    VulnDBMetadata,
+    ImagePackageVulnerability,
     VulnDBCpe,
-    get_thread_scoped_session as get_session,
-    select_nvd_classes,
+    VulnDBMetadata,
+    Vulnerability,
 )
-from anchore_engine.db import Vulnerability, ImagePackageVulnerability
+from anchore_engine.db import get_thread_scoped_session as get_session
+from anchore_engine.db import select_nvd_classes
 from anchore_engine.services.policy_engine.api.models import (
-    Vulnerability as VulnerabilityModel,
-    VulnerabilityMatch,
     Artifact,
-    ImageVulnerabilitiesReport,
-    VulnerabilitiesReportMetadata,
     CvssCombined,
     FixedArtifact,
+    ImageVulnerabilitiesReport,
     Match,
+    VulnerabilitiesReportMetadata,
+)
+from anchore_engine.services.policy_engine.api.models import (
+    Vulnerability as VulnerabilityModel,
+)
+from anchore_engine.services.policy_engine.api.models import VulnerabilityMatch
+from anchore_engine.services.policy_engine.engine.feeds.client import (
+    get_feeds_client,
+    get_grype_db_client,
 )
 from anchore_engine.services.policy_engine.engine.feeds.config import (
+    SyncConfig,
     get_provider_name,
     get_section_for_vulnerabilities,
-    SyncConfig,
+)
+from anchore_engine.services.policy_engine.engine.feeds.data_feeds_utils import (
+    DataFeedsUtils,
 )
 from anchore_engine.services.policy_engine.engine.feeds.feeds import (
     have_vulnerabilities_for,
 )
 from anchore_engine.services.policy_engine.engine.vulnerabilities import (
-    merge_nvd_metadata_image_packages,
-    merge_nvd_metadata,
     get_imageId_to_record,
+    merge_nvd_metadata,
+    merge_nvd_metadata_image_packages,
 )
 from anchore_engine.subsys import logger as log
 from anchore_engine.subsys import metrics
 from anchore_engine.utils import timer
-from .dedup import get_image_vulnerabilities_deduper, transfer_vulnerability_timestamps
-from .scanners import LegacyScanner, GrypeVulnScanner
-from .stores import ImageVulnerabilitiesStore, Status
+
+from .cache_managers import CacheStatus, GrypeCacheManager
+from .dedup import get_image_vulnerabilities_deduper
+from .mappers import EngineGrypeMapper
+from .scanners import GrypeVulnScanner, LegacyScanner
+
+GRYPE_DB_FEED_NAME = "grypedb"
 
 
 class VulnerabilitiesProvider(ABC):
@@ -109,6 +125,26 @@ class VulnerabilitiesProvider(ABC):
         """
         Query the image set impacted by a specific vulnerability
         """
+        ...
+
+    @abstractmethod
+    def get_client(self, sync_config):
+        ...
+
+    @abstractmethod
+    def sync_metadata(self, source_feeds, operation_id, to_sync):
+        ...
+
+    @abstractmethod
+    def _get_filtered_sync_configs(self, sync_configs):
+        ...
+
+    def get_feeds_to_sync(self, sync_configs):
+        sync_configs = self._get_filtered_sync_configs(sync_configs)
+        return list(sync_configs.keys())
+
+    @staticmethod
+    def get_groups_to_download(source_feeds, updated, operation_id):
         ...
 
 
@@ -739,6 +775,24 @@ class LegacyProvider(VulnerabilitiesProvider):
                 )
                 return "http://<valid endpoint not found>"
 
+    def _get_filtered_sync_configs(self, sync_configs):
+        return {
+            feed_name: sync_config
+            for feed_name, sync_config in sync_configs.items()
+            if feed_name != GRYPE_DB_FEED_NAME
+        }
+
+    def get_client(self, sync_configs):
+        legacy_sync_configs = self._get_filtered_sync_configs(sync_configs)
+        sync_config = list(legacy_sync_configs.values())[0]
+        return get_feeds_client(sync_config)
+
+    def sync_metadata(self, source_feeds, operation_id, to_sync):
+        return DataFeedsUtils.sync_metadata(source_feeds, to_sync, operation_id)
+
+    def get_groups_to_download(self, source_feeds, feeds_to_sync, operation_id):
+        return DataFeedsUtils.get_groups_to_download(feeds_to_sync, operation_id)
+
 
 class GrypeProvider(VulnerabilitiesProvider):
     __scanner__ = GrypeVulnScanner
@@ -919,6 +973,30 @@ class GrypeProvider(VulnerabilitiesProvider):
 
     def get_images_by_vulnerability(self, **kwargs):
         pass
+
+    def _get_filtered_sync_configs(self, sync_configs):
+        return {GRYPE_DB_FEED_NAME: sync_configs.get(GRYPE_DB_FEED_NAME)}
+
+    def get_client(self, sync_configs):
+        grype_db_sync_config = sync_configs.get(GRYPE_DB_FEED_NAME)
+        return get_grype_db_client(grype_db_sync_config)
+
+    def sync_metadata(self, source_feeds, operation_id, to_sync):
+        return DataFeedsUtils.sync_metadata(
+            source_feeds, to_sync, operation_id, groups=False
+        )
+
+    def get_groups_to_download(self, source_feeds, updated, operation_id):
+        api_feed_group = source_feeds[GRYPE_DB_FEED_NAME]["groups"][0]
+        feed_metadata = updated[GRYPE_DB_FEED_NAME]
+        group_to_download = FeedGroupMetadata(
+            name=api_feed_group.name,
+            feed_name=feed_metadata.name,
+            description=api_feed_group.description,
+            access_tier=api_feed_group.access_tier,
+            enabled=True,
+        )
+        return [group_to_download]
 
 
 # Override this map for associating different provider classes
