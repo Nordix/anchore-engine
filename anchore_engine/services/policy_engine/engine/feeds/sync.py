@@ -240,7 +240,7 @@ class DataFeeds(object):
         :return:
         """
         result = []
-        to_sync = sync_util_provider.to_sync()
+        to_sync = sync_util_provider.to_sync
         if not to_sync:
             return result
         feed_client = sync_util_provider.get_client()
