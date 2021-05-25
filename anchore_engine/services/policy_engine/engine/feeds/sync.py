@@ -240,7 +240,7 @@ class DataFeeds(object):
         :return:
         """
         result = []
-        to_sync = sync_util_provider.get_feeds_to_sync()
+        to_sync = sync_util_provider.to_sync()
         if not to_sync:
             return result
         feed_client = sync_util_provider.get_client()
@@ -252,7 +252,7 @@ class DataFeeds(object):
         )
         source_feeds = DataFeeds.get_feed_group_information(feed_client, to_sync)
         updated, failed = sync_util_provider.sync_metadata(
-            source_feeds, operation_id, to_sync
+            source_feeds, operation_id
         )
         updated_names = set(updated.keys())
 

@@ -192,8 +192,13 @@ class MetadataSyncUtils:
 class SyncUtilProvider(ABC):
     def __init__(self, sync_configs):
         self._sync_configs = self._get_filtered_sync_configs(sync_configs)
+        self._to_sync = self._get_feeds_to_sync()
 
-    def get_feeds_to_sync(self):
+    @property
+    def to_sync(self):
+        return self._to_sync
+
+    def _get_feeds_to_sync(self):
         return list(self._sync_configs.keys())
 
     @staticmethod
@@ -206,7 +211,7 @@ class SyncUtilProvider(ABC):
         ...
 
     @abstractmethod
-    def sync_metadata(self, source_feeds, operation_id, to_sync):
+    def sync_metadata(self, source_feeds, operation_id):
         ...
 
     @staticmethod
@@ -227,8 +232,8 @@ class LegacySyncUtilProvider(SyncUtilProvider):
         sync_config = list(self._sync_configs.values())[0]
         return get_feeds_client(sync_config)
 
-    def sync_metadata(self, source_feeds, operation_id, to_sync):
-        return MetadataSyncUtils.sync_metadata(source_feeds, to_sync, operation_id)
+    def sync_metadata(self, source_feeds, operation_id):
+        return MetadataSyncUtils.sync_metadata(source_feeds, self.to_sync, operation_id)
 
     def get_groups_to_download(self, source_feeds, feeds_to_sync, operation_id):
         # Do the fetches
@@ -274,9 +279,9 @@ class GrypeDBSyncUtilProvider(SyncUtilProvider):
         grype_db_sync_config = self._sync_configs.get(GRYPE_DB_FEED_NAME)
         return get_grype_db_client(grype_db_sync_config)
 
-    def sync_metadata(self, source_feeds, operation_id, to_sync):
+    def sync_metadata(self, source_feeds, operation_id):
         return MetadataSyncUtils.sync_metadata(
-            source_feeds, to_sync, operation_id, groups=False
+            source_feeds, self.to_sync, operation_id, groups=False
         )
 
     def get_groups_to_download(self, source_feeds, updated, operation_id):
