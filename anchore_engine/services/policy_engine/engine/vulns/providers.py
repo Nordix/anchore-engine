@@ -39,13 +39,13 @@ from anchore_engine.services.policy_engine.engine.feeds.config import (
     get_provider_name,
     get_section_for_vulnerabilities,
 )
+from anchore_engine.services.policy_engine.engine.feeds.feeds import (
+    have_vulnerabilities_for,
+)
 from anchore_engine.services.policy_engine.engine.feeds.sync_utils import (
     GrypeDBSyncUtilProvider,
     LegacySyncUtilProvider,
     SyncUtilProvider,
-)
-from anchore_engine.services.policy_engine.engine.feeds.feeds import (
-    have_vulnerabilities_for,
 )
 from anchore_engine.services.policy_engine.engine.vulnerabilities import (
     get_imageId_to_record,
@@ -56,10 +56,9 @@ from anchore_engine.subsys import logger as log
 from anchore_engine.subsys import metrics
 from anchore_engine.utils import timer
 
-from .cache_managers import CacheStatus, GrypeCacheManager
-from .dedup import get_image_vulnerabilities_deduper
-from .mappers import EngineGrypeMapper
+from .dedup import get_image_vulnerabilities_deduper, transfer_vulnerability_timestamps
 from .scanners import GrypeVulnScanner, LegacyScanner
+from .stores import ImageVulnerabilitiesStore, Status
 
 
 class VulnerabilitiesProvider(ABC):
@@ -756,7 +755,9 @@ class LegacyProvider(VulnerabilitiesProvider):
                 )
                 return "http://<valid endpoint not found>"
 
-    def get_sync_utils(self, sync_configs: Dict[str, SyncConfig]) -> LegacySyncUtilProvider:
+    def get_sync_utils(
+        self, sync_configs: Dict[str, SyncConfig]
+    ) -> LegacySyncUtilProvider:
         """
         Get a SyncUtilProvider.
         """
@@ -943,7 +944,9 @@ class GrypeProvider(VulnerabilitiesProvider):
     def get_images_by_vulnerability(self, **kwargs):
         pass
 
-    def get_sync_utils(self, sync_configs: Dict[str, SyncConfig]) -> GrypeDBSyncUtilProvider:
+    def get_sync_utils(
+        self, sync_configs: Dict[str, SyncConfig]
+    ) -> GrypeDBSyncUtilProvider:
         """
         Get a SyncUtilProvider.
         """
