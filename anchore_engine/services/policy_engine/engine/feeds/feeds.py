@@ -215,6 +215,18 @@ class DataFeed(ABC):
         ...
 
     @abstractmethod
+    def flush_group(self, group_name: str) -> FeedGroupMetadata:
+        """
+        Flush a specific data group. Do a db flush, but not a commit at the end to keep the transaction open.
+
+        :param group_name: name of group to flush
+        :type group_name: str
+        :return: db record containing metadata of group flushed
+        :rtype: FeedGroupMetadata
+        """
+        ...
+
+    @abstractmethod
     def flush_all(self) -> FeedMetadata:
         """
         Flush all groups for the feed, unset the last full sync timestamp, but leave metadata records for feed.

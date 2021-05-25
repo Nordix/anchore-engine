@@ -251,9 +251,7 @@ class DataFeeds(object):
             )
         )
         source_feeds = DataFeeds.get_feed_group_information(feed_client, to_sync)
-        updated, failed = sync_util_provider.sync_metadata(
-            source_feeds, operation_id
-        )
+        updated, failed = sync_util_provider.sync_metadata(source_feeds, operation_id)
         updated_names = set(updated.keys())
 
         # Feeds configured to sync but that were not on the upstream source at all
@@ -472,7 +470,6 @@ class DataFeeds(object):
         f = feed_instance_by_name(feed_name)
         if not f:
             raise KeyError(feed_name)
-
         return f.flush_group(group_name)
 
     @staticmethod
