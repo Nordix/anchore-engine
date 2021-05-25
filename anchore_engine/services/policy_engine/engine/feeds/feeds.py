@@ -745,7 +745,7 @@ class GrypeDBFeed(DataFeed):
         """
         Self-contained unit of work to update the row counts for each feed group in the feed group metadata
         """
-        raise NotImplementedError
+        return
 
     def flush_all(self) -> FeedMetadata:
         """
@@ -759,7 +759,7 @@ class GrypeDBFeed(DataFeed):
             catalog_client = self._catalog_client
             records = self._find_match(db)
             for record in records:
-                catalog_client.delete_document(record.group_name, record.checksum)
+                catalog_client.delete_document(self.__feed_name__, record.archive_checksum)
                 db.delete(record)
             db.refresh(self.metadata)
 
