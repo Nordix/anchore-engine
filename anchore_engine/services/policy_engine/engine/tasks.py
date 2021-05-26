@@ -671,7 +671,8 @@ class GrypeDBSyncTask(IAsyncTask):
         rtype: bool
         """
         try:
-            return GrypeDBSyncManager.run_grypedb_sync(self.grypedb_file_path)
+            session = get_session()
+            return GrypeDBSyncManager.run_grypedb_sync(session, self.grypedb_file_path)
         except NoActiveGrypeDB:
             logger.info("Grype DB not yet initialized. Waiting for initial sync...")
         finally:

@@ -202,7 +202,7 @@ class GrypeScanner:
 
         # check and run grype sync if necessary
         try:
-            GrypeDBSyncManager.run_grypedb_sync()
+            GrypeDBSyncManager.run_grypedb_sync(db_session)
         except NoActiveGrypeDB:
             logger.exception("Failed to initialize local vulnerability database")
             report.problems.append(
