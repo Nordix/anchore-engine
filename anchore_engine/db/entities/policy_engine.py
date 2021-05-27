@@ -73,8 +73,8 @@ class FeedMetadata(Base, UtilMixin):
     enabled = Column(Boolean, default=True)
 
     @classmethod
-    def get_by_name(cls, name):
-        return FeedMetadata.query.filter(name=name).scalar()
+    def get_by_name(cls, session, name):
+        return session.query(cls).filter(cls.name == name).scalar()
 
     def __repr__(self):
         return "<{}(name={}, access_tier={}, enabled={}, created_at={}>".format(
@@ -161,7 +161,7 @@ class GrypeDBFeedMetadata(Base):
         nullable=False,
     )
     synced_at = Column(DateTime, nullable=True)
-    groups = Column(JSONB)
+    groups = Column(JSONB, default=[])
 
 
 class GenericFeedDataRecord(Base):
