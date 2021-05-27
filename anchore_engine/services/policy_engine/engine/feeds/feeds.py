@@ -6,6 +6,7 @@ from typing import List, Optional, Sequence, Tuple
 
 from sqlalchemy.orm.session import Session
 
+from anchore_engine.clients.grype_wrapper import GrypeWrapperSingleton
 from anchore_engine.clients.services import internal_client_for
 from anchore_engine.clients.services.catalog import CatalogClient
 from anchore_engine.clients.services.simplequeue import SimpleQueueClient
@@ -897,6 +898,30 @@ class GrypeDBFeed(DataFeed):
                 f.write(grype_db_data)
             GrypeDBSyncManager.run_grypedb_sync(grypedb_file.path)
 
+    def _set_group_counts(self, db) -> None:
+        groups = []
+        source_counts = (
+            GrypeWrapperSingleton.get_instance().query_record_source_counts()
+        )
+
+        for source in source_counts:
+            groups.append(
+                FeedGroupMetadata(
+                    name=source.group,
+                    feed_name=self.__feed_name__,
+                    description="Upstream source of grype db vulnerability",
+                    access_tier=0,
+                    last_sync=self.grypedb_meta.synced_at,
+                    created_at=self.grypedb_meta.created_at,
+                    last_update=self.grypedb_meta.last_updated,
+                    enabled=True,
+                    count=source.count,
+                ).to_json()
+            )
+
+        self.grypedb_meta.groups = groups
+        db.flush()
+
     def _process_group_file_records(
         self,
         db: Session,
@@ -1087,6 +1112,7 @@ class GrypeDBFeed(DataFeed):
                 raise ValueError("Grype DB Meta not found")
 
             self.grypedb_meta.synced_at = last_sync
+            self._set_group_counts(db)
             db.commit()
         finally:
             db.rollback()
