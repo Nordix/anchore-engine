@@ -4,8 +4,9 @@ import json
 import time
 import uuid
 from abc import ABC, abstractmethod
-from typing import Dict, List
+from typing import Dict, Iterable, List
 
+import dateutil.parser
 from sqlalchemy import asc, func, orm
 
 from anchore_engine import version
@@ -13,6 +14,8 @@ from anchore_engine.clients.services.common import get_service_endpoint
 from anchore_engine.common.helpers import make_response_error
 from anchore_engine.db import (
     DistroNamespace,
+    FeedGroupMetadata,
+    FeedMetadata,
     Image,
     ImageCpe,
     ImagePackageVulnerability,
@@ -40,9 +43,18 @@ from anchore_engine.services.policy_engine.engine.feeds.config import (
     get_provider_name,
     get_section_for_vulnerabilities,
 )
+from anchore_engine.services.policy_engine.engine.feeds.db import (
+    get_all_feeds_detached,
+    get_feed_detached,
+)
 from anchore_engine.services.policy_engine.engine.feeds.feeds import (
+    GrypeDBFeed,
     have_vulnerabilities_for,
 )
+from anchore_engine.services.policy_engine.engine.feeds.grypedb_sync import (
+    GrypeDBSyncManager,
+)
+from anchore_engine.services.policy_engine.engine.feeds.sync import DataFeeds
 from anchore_engine.services.policy_engine.engine.feeds.sync_utils import (
     GrypeDBSyncUtilProvider,
     LegacySyncUtilProvider,
@@ -55,7 +67,7 @@ from anchore_engine.services.policy_engine.engine.vulnerabilities import (
 )
 from anchore_engine.subsys import logger as log
 from anchore_engine.subsys import metrics
-from anchore_engine.utils import timer
+from anchore_engine.utils import rfc3339str_to_datetime, timer
 
 from .dedup import get_image_vulnerabilities_deduper, transfer_vulnerability_timestamps
 from .scanners import LegacyScanner, GrypeScanner
@@ -125,6 +137,29 @@ class VulnerabilitiesProvider(ABC):
     def get_sync_utils(self, sync_configs: Dict[str, SyncConfig]) -> SyncUtilProvider:
         """
         Get a SyncUtilProvider.
+        """
+        ...
+
+    @abstractmethod
+    def get_feeds_detached(self) -> List[FeedMetadata]:
+        """
+        Gets a list of feeds consumed by provider in detached state
+        """
+        ...
+
+    @abstractmethod
+    def get_feed_groups_detached(
+        self, feed: FeedMetadata
+    ) -> Iterable[FeedGroupMetadata]:
+        """
+        Gets a list of all groups from specified feed consumed by provider in detached state
+        """
+        ...
+
+    @abstractmethod
+    def update_feed_group_counts(self) -> None:
+        """
+        Update counts of feed and groups
         """
         ...
 
@@ -772,6 +807,27 @@ class LegacyProvider(VulnerabilitiesProvider):
         """
         return LegacySyncUtilProvider(sync_configs)
 
+    def get_feeds_detached(self) -> List[FeedMetadata]:
+        """
+        Returns all feeds excluding grypedb feed in detached state
+        """
+        feeds = get_all_feeds_detached()
+        return list(filter(lambda feed: feed.name != GrypeDBFeed.__feed_name__, feeds))
+
+    def get_feed_groups_detached(
+        self, feed: FeedMetadata
+    ) -> Iterable[FeedGroupMetadata]:
+        """
+        Gets a list of all groups consumed by Legacy provider from specified feed in a detached state
+        """
+        return feed.groups
+
+    def update_feed_group_counts(self) -> None:
+        """
+        Update counts of feed and groups
+        """
+        DataFeeds.update_counts()
+
 
 class GrypeProvider(VulnerabilitiesProvider):
     __scanner__ = GrypeScanner
@@ -988,6 +1044,50 @@ class GrypeProvider(VulnerabilitiesProvider):
         Get a SyncUtilProvider.
         """
         return GrypeDBSyncUtilProvider(sync_configs)
+
+    def get_feeds_detached(self) -> List[FeedMetadata]:
+        """
+        Returns only the grypedb feed in detached state
+        """
+        feed = get_feed_detached(GrypeDBFeed.__feed_name__)
+        if isinstance(feed, FeedMetadata):
+            return [feed]
+        else:
+            return []
+
+    def get_feed_groups_detached(
+        self, feed: FeedMetadata
+    ) -> Iterable[FeedGroupMetadata]:
+        """
+        Gets a list of all groups on the current active grype db. Does not actuall
+        """
+        groups = []
+
+        if feed.name != GrypeDBFeed.__feed_name__:
+            raise ValueError(
+                "Incorrect feed passed Grype provider get_feed_groups_detached function"
+            )
+
+        active_db = GrypeDBSyncManager._query_active_dbs()
+        for raw_group in active_db.groups:
+            # Because groups are saved as json, the timestamps are converted to strings
+            # In order to support marshmallow api models, the timestamp fields need to be converted to datetime
+            time_fields = ["created_at", "last_update", "last_sync"]
+            for field in time_fields:
+                if isinstance(raw_group[field], str):
+                    raw_group[field] = dateutil.parser.isoparse(raw_group[field])
+
+            # convert raw_group to an instance of FeedGroupMetadata and append to groups
+            feed_group_metadata = FeedGroupMetadata(**raw_group)
+            groups.append(feed_group_metadata)
+
+        return groups
+
+    def update_feed_group_counts(self) -> None:
+        """
+        Counts on grypedb are static so no need to update
+        """
+        return
 
 
 # Override this map for associating different provider classes
